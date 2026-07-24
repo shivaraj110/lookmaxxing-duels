@@ -78,9 +78,12 @@ export default function DuelRoom({
       }
       if (stopped) return;
 
-      const port = process.env.NEXT_PUBLIC_WS_PORT ?? "3001";
+      // The ws-server is a separate service (its own repo / host). In prod set
+      // NEXT_PUBLIC_WS_URL to its public origin, e.g. wss://ws.example.com.
+      const base =
+        process.env.NEXT_PUBLIC_WS_URL ?? `ws://${location.hostname}:3001`;
       ws = new WebSocket(
-        `ws://${location.hostname}:${port}/?ticket=${encodeURIComponent(ticket)}`
+        `${base}/?ticket=${encodeURIComponent(ticket)}`
       );
       ws.onmessage = (e) => {
         let event: DuelEvent;
