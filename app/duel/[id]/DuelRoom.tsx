@@ -323,7 +323,7 @@ export default function DuelRoom({
       {duel.opponent && (
         <section className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6">
           <h2 className="mb-3 text-lg font-bold">Trash talk 🗑️</h2>
-          <div className="mb-4 flex max-h-64 flex-col gap-2 overflow-y-auto">
+          <div className="nice-scroll mb-4 flex max-h-64 flex-col gap-2 overflow-y-auto pr-1">
             {chat.length === 0 && (
               <p className="text-sm text-zinc-500">
                 Silence… someone break the ice.
