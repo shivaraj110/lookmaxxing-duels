@@ -1,59 +1,32 @@
 /**
  * Realtime WebSocket server.
  *
- * Browsers connect to ws://localhost:3001/?duel=<id> (session cookie
- * required). Server actions in the Next.js app publish events with
- * `pg_notify('duel_events', ...)`; this process LISTENs on that channel
- * and fans each event out to every socket in the duel's room.
+ * Browsers connect to ws://localhost:3001/?ticket=<signed-ticket>. The ticket
+ * is minted by the Next.js app (GET /api/ws-ticket) after it verifies the
+ * user's session, and carries the duel id it grants access to. This server
+ * verifies the ticket's HMAC signature with a shared secret — so it needs NO
+ * database credentials.
+ *
+ * Events arrive over Redis pub/sub: server actions in the Next.js app publish
+ * to the `duel_events` channel; this process subscribes and fans each event
+ * out to every socket in the target duel's room.
  *
  * Run: npm run dev (alongside next dev) or `npx tsx ws-server.ts`.
  */
 import { existsSync } from "node:fs";
 import { createServer } from "node:http";
-import crypto from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
-import { Client, Pool } from "pg";
-import { drizzle } from "drizzle-orm/node-postgres";
-import { and, eq, gt } from "drizzle-orm";
-import { sessions } from "./lib/schema";
+import Redis from "ioredis";
+import { verifyTicket } from "./lib/ws-ticket";
+import { DUEL_CHANNEL } from "./lib/redis";
 import type { DuelEvent } from "./lib/types";
 
 if (existsSync(".env.local")) process.loadEnvFile(".env.local");
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ?? "postgres://duels:duels@127.0.0.1:5433/duels";
 const PORT = Number(process.env.WS_PORT ?? 3001);
-const SESSION_COOKIE = "duels_session";
+const REDIS_URL = process.env.REDIS_URL ?? "redis://127.0.0.1:6380";
 
-const pool = new Pool({ connectionString: DATABASE_URL });
-const orm = drizzle(pool);
 const rooms = new Map<string, Set<WebSocket>>();
-
-const sha256 = (s: string) =>
-  crypto.createHash("sha256").update(s).digest("hex");
-
-function parseCookie(header: string, name: string): string | null {
-  for (const part of header.split(";")) {
-    const [k, ...v] = part.trim().split("=");
-    if (k === name) return decodeURIComponent(v.join("="));
-  }
-  return null;
-}
-
-async function userIdFromCookies(header: string): Promise<string | null> {
-  const token = parseCookie(header, SESSION_COOKIE);
-  if (!token) return null;
-  const rows = await orm
-    .select({ user_id: sessions.user_id })
-    .from(sessions)
-    .where(
-      and(
-        eq(sessions.token_hash, sha256(token)),
-        gt(sessions.expires_at, new Date())
-      )
-    );
-  return rows[0]?.user_id ?? null;
-}
 
 async function main() {
   const server = createServer((_req, res) => {
@@ -62,16 +35,16 @@ async function main() {
   });
   const wss = new WebSocketServer({ noServer: true });
 
-  server.on("upgrade", async (req, socket, head) => {
+  server.on("upgrade", (req, socket, head) => {
     try {
-      const userId = await userIdFromCookies(req.headers.cookie ?? "");
       const url = new URL(req.url ?? "/", "http://localhost");
-      const duelId = url.searchParams.get("duel");
-      if (!userId || !duelId) {
+      const claims = verifyTicket(url.searchParams.get("ticket") ?? "");
+      if (!claims) {
         socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
         socket.destroy();
         return;
       }
+      const duelId = claims.duel;
       wss.handleUpgrade(req, socket, head, (ws) => {
         let room = rooms.get(duelId);
         if (!room) rooms.set(duelId, (room = new Set()));
@@ -87,27 +60,25 @@ async function main() {
     }
   });
 
-  // Dedicated connection for LISTEN (pool connections can't hold LISTEN).
-  const listener = new Client({ connectionString: DATABASE_URL });
-  await listener.connect();
-  await listener.query("listen duel_events");
-  listener.on("notification", (msg) => {
-    if (!msg.payload) return;
+  // Dedicated subscriber connection (a subscribed Redis client can't run
+  // other commands).
+  const sub = new Redis(REDIS_URL);
+  await sub.subscribe(DUEL_CHANNEL);
+  sub.on("message", (_channel, payload) => {
     let event: DuelEvent;
     try {
-      event = JSON.parse(msg.payload);
+      event = JSON.parse(payload);
     } catch {
       return;
     }
     const room = rooms.get(event.duelId);
     if (!room) return;
     for (const ws of room) {
-      if (ws.readyState === ws.OPEN) ws.send(msg.payload);
+      if (ws.readyState === ws.OPEN) ws.send(payload);
     }
   });
-  listener.on("error", (err) => {
-    console.error("listener connection error:", err);
-    process.exit(1); // let the process manager / dev script restart us
+  sub.on("error", (err) => {
+    console.error("redis subscriber error:", err);
   });
 
   server.listen(PORT, () =>

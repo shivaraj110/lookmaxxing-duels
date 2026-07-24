@@ -59,15 +59,28 @@ export default function DuelRoom({
 
   // Realtime: connect to the ws-server room for this duel. Chat messages
   // arrive in the event payload; anything else triggers a server refetch.
+  // Each connect first fetches a short-lived signed admission ticket from
+  // the app (the ws-server has no DB, so it can't check sessions itself).
   useEffect(() => {
     let ws: WebSocket | null = null;
     let stopped = false;
     let retry: ReturnType<typeof setTimeout>;
 
-    const connect = () => {
+    const connect = async () => {
+      let ticket: string;
+      try {
+        const res = await fetch(`/api/ws-ticket?duel=${duel.id}`);
+        if (!res.ok) throw new Error(String(res.status));
+        ticket = (await res.json()).ticket;
+      } catch {
+        if (!stopped) retry = setTimeout(connect, 2000);
+        return;
+      }
+      if (stopped) return;
+
       const port = process.env.NEXT_PUBLIC_WS_PORT ?? "3001";
       ws = new WebSocket(
-        `ws://${location.hostname}:${port}/?duel=${duel.id}`
+        `ws://${location.hostname}:${port}/?ticket=${encodeURIComponent(ticket)}`
       );
       ws.onmessage = (e) => {
         let event: DuelEvent;

@@ -4,6 +4,7 @@
  */
 import { Pool, types } from "pg";
 import { WebSocket } from "ws";
+import Redis from "ioredis";
 import { localDateStr, addDays, playerState, resolveDuel } from "../lib/duels";
 
 // Match the app: date columns as YYYY-MM-DD strings
@@ -14,6 +15,16 @@ const PASSWORD = "smoke-pass-123";
 const pool = new Pool({
   connectionString: "postgres://duels:duels@127.0.0.1:5433/duels",
 });
+const redis = new Redis(process.env.REDIS_URL ?? "redis://127.0.0.1:6380");
+
+/** Fetch a signed ws admission ticket the way the browser does. */
+async function wsTicket(cookie: string, duelId: string): Promise<string> {
+  const res = await fetch(`${WEB}/api/ws-ticket?duel=${duelId}`, {
+    headers: { cookie },
+  });
+  if (!res.ok) throw new Error(`ws-ticket ${res.status}`);
+  return (await res.json()).ticket;
+}
 
 let failures = 0;
 function check(name: string, cond: boolean, extra?: unknown) {
@@ -141,25 +152,37 @@ async function main() {
     duelPage.status
   );
 
-  console.log("5. Realtime WebSocket");
+  console.log("5. Realtime WebSocket (ticket auth + Redis pub/sub)");
   const unauth = await new Promise<boolean>((resolve) => {
-    const ws = new WebSocket(`ws://localhost:3001/?duel=${duel.id}`);
+    const ws = new WebSocket(`ws://localhost:3001/?ticket=forged.nope`);
     ws.on("unexpected-response", (_r, res) => resolve(res.statusCode === 401));
     ws.on("open", () => resolve(false));
     ws.on("error", () => {});
     setTimeout(() => resolve(false), 4000);
   });
-  check("ws rejects connection without session cookie (401)", unauth);
+  check("ws rejects connection with an invalid ticket (401)", unauth);
 
+  const noTicket = await new Promise<boolean>((resolve) => {
+    const ws = new WebSocket(`ws://localhost:3001/`);
+    ws.on("unexpected-response", (_r, res) => resolve(res.statusCode === 401));
+    ws.on("open", () => resolve(false));
+    ws.on("error", () => {});
+    setTimeout(() => resolve(false), 4000);
+  });
+  check("ws rejects connection with no ticket (401)", noTicket);
+
+  const ticketA = await wsTicket(cookieA, duel.id);
   const gotEvent = await new Promise<boolean>((resolve) => {
-    const ws = new WebSocket(`ws://localhost:3001/?duel=${duel.id}`, {
-      headers: { cookie: cookieA },
-    });
+    const ws = new WebSocket(`ws://localhost:3001/?ticket=${ticketA}`);
     const t = setTimeout(() => resolve(false), 6000);
     ws.on("open", () => {
-      pool.query("select pg_notify('duel_events', $1)", [
-        JSON.stringify({ duelId: duel.id, kind: "checkin" }),
-      ]);
+      // Small delay so the SUBSCRIBE + room join settle before publishing.
+      setTimeout(() => {
+        redis.publish(
+          "duel_events",
+          JSON.stringify({ duelId: duel.id, kind: "checkin" })
+        );
+      }, 200);
     });
     ws.on("message", (data) => {
       const evt = JSON.parse(data.toString());
@@ -168,22 +191,24 @@ async function main() {
     });
     ws.on("error", () => resolve(false));
   });
-  check("authed ws receives LISTEN/NOTIFY broadcast", gotEvent);
+  check("authed ws receives Redis pub/sub broadcast", gotEvent);
 
-  console.log("6. Chat message via NOTIFY payload");
+  console.log("6. Chat message via Redis payload");
+  const ticketB = await wsTicket(cookieB, duel.id);
   const gotChat = await new Promise<boolean>((resolve) => {
-    const ws = new WebSocket(`ws://localhost:3001/?duel=${duel.id}`, {
-      headers: { cookie: cookieB },
-    });
+    const ws = new WebSocket(`ws://localhost:3001/?ticket=${ticketB}`);
     const t = setTimeout(() => resolve(false), 6000);
     ws.on("open", () => {
-      pool.query("select pg_notify('duel_events', $1)", [
-        JSON.stringify({
-          duelId: duel.id,
-          kind: "message",
-          message: { id: "m1", body: "you're going down", username: "alice" },
-        }),
-      ]);
+      setTimeout(() => {
+        redis.publish(
+          "duel_events",
+          JSON.stringify({
+            duelId: duel.id,
+            kind: "message",
+            message: { id: "m1", body: "you're going down", username: "alice" },
+          })
+        );
+      }, 200);
     });
     ws.on("message", (data) => {
       const evt = JSON.parse(data.toString());
@@ -246,6 +271,7 @@ async function main() {
     failures === 0 ? "\nALL CHECKS PASSED ✅" : `\n${failures} CHECK(S) FAILED ❌`
   );
   await pool.end();
+  redis.disconnect();
   process.exit(failures === 0 ? 0 : 1);
 }
 

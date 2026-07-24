@@ -12,5 +12,11 @@ services:
       # postgres 18+ images keep data under /var/lib/postgresql (not .../data)
       - duels-pgdata:/var/lib/postgresql
 
+  redis:
+    image: redis:alpine
+    container_name: duels-redis
+    ports:
+      - "6380:6379" # 6379 is taken by another redis on this machine
+
 volumes:
   duels-pgdata:

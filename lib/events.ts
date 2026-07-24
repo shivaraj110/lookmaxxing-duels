@@ -1,18 +1,14 @@
-import { sql } from "drizzle-orm";
-import { db } from "./db";
+import { DUEL_CHANNEL, redis } from "./redis";
 import type { DuelEvent } from "./types";
 
 /**
- * Fan out a duel event via Postgres NOTIFY. The standalone WebSocket
- * server (ws-server.ts) LISTENs on this channel and broadcasts to every
- * browser watching the duel.
+ * Fan out a duel event via Redis pub/sub. The standalone WebSocket server
+ * (ws-server.ts) subscribes to this channel and broadcasts each event to
+ * every browser watching the duel.
  */
 export async function publishDuelEvent(event: DuelEvent) {
   try {
-    const d = await db();
-    await d.execute(
-      sql`select pg_notify('duel_events', ${JSON.stringify(event)})`
-    );
+    await redis.publish(DUEL_CHANNEL, JSON.stringify(event));
   } catch (err) {
     console.error("publishDuelEvent failed:", err);
   }
