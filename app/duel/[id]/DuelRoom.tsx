@@ -13,7 +13,7 @@ import type {
   PlayerState,
 } from "@/lib/types";
 
-type ChatMessage = Message & { username?: string };
+type ChatMessage = Message & { username?: string; optimistic?: boolean };
 
 export default function DuelRoom({
   duel,
@@ -45,12 +45,21 @@ export default function DuelRoom({
   const myState = states[meId];
 
   // Keep chat in sync when the server component re-renders, preserving any
-  // realtime messages the refetch hasn't caught up with yet.
+  // realtime/optimistic messages the refetch hasn't caught up with yet.
   const [prevMessages, setPrevMessages] = useState(messages);
   if (messages !== prevMessages) {
     setPrevMessages(messages);
     const ids = new Set(messages.map((m) => m.id));
-    setChat((prev) => [...messages, ...prev.filter((m) => !ids.has(m.id))]);
+    const persisted = new Set(messages.map((m) => `${m.user_id}|${m.body}`));
+    setChat((prev) => [
+      ...messages,
+      ...prev.filter(
+        (m) =>
+          !ids.has(m.id) &&
+          // drop optimistic placeholders that have since been persisted
+          !(m.optimistic && persisted.has(`${m.user_id}|${m.body}`))
+      ),
+    ]);
   }
 
   useEffect(() => {
@@ -94,9 +103,14 @@ export default function DuelRoom({
         }
         if (event.kind === "message" && event.message) {
           const m = event.message;
-          setChat((prev) =>
-            prev.some((x) => x.id === m.id) ? prev : [...prev, m]
-          );
+          setChat((prev) => {
+            // Clear our own optimistic placeholder, then add the real row.
+            const base =
+              m.user_id === meId
+                ? prev.filter((x) => !(x.optimistic && x.body === m.body))
+                : prev;
+            return base.some((x) => x.id === m.id) ? base : [...base, m];
+          });
         } else {
           router.refresh();
         }
@@ -112,7 +126,7 @@ export default function DuelRoom({
       clearTimeout(retry);
       ws?.close();
     };
-  }, [duel.id, router]);
+  }, [duel.id, router, meId]);
 
   const playerIds = [duel.creator, duel.opponent].filter(Boolean) as string[];
 
@@ -322,7 +336,7 @@ export default function DuelRoom({
                   m.user_id === meId
                     ? "self-end bg-red-900/60"
                     : "self-start bg-zinc-800"
-                }`}
+                } ${m.optimistic ? "opacity-60" : ""}`}
               >
                 <span className="mr-2 font-bold text-zinc-300">
                   @{m.username ?? byId[m.user_id]?.username}
@@ -336,7 +350,23 @@ export default function DuelRoom({
             <form
               ref={chatFormRef}
               action={async (fd) => {
+                const body = String(fd.get("body") ?? "").trim();
                 chatFormRef.current?.reset();
+                if (!body) return;
+                // Optimistic: render instantly; the ws echo (or a refetch)
+                // reconciles this placeholder with the persisted row.
+                setChat((prev) => [
+                  ...prev,
+                  {
+                    id: `tmp-${crypto.randomUUID()}`,
+                    duel_id: duel.id,
+                    user_id: meId,
+                    body,
+                    created_at: new Date().toISOString(),
+                    username: byId[meId]?.username,
+                    optimistic: true,
+                  },
+                ]);
                 await sendChat(duel.id, fd);
               }}
               className="flex gap-2"
