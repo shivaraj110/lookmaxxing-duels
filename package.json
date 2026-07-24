@@ -3,24 +3,36 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "concurrently -k -n web,ws -c blue,magenta \"next dev\" \"tsx watch ws-server.ts\"",
+    "dev:web": "next dev",
+    "dev:ws": "tsx watch ws-server.ts",
     "build": "next build",
-    "start": "next start",
+    "db:generate": "drizzle-kit generate",
+    "db:studio": "drizzle-kit studio",
+    "start": "concurrently -k -n web,ws -c blue,magenta \"next start\" \"tsx ws-server.ts\"",
     "lint": "eslint"
   },
   "dependencies": {
+    "drizzle-orm": "^0.45.2",
     "next": "16.2.11",
+    "pg": "^8.22.0",
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-dom": "19.2.4",
+    "ws": "^8.21.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
+    "@types/pg": "^8.20.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/ws": "^8.18.1",
+    "concurrently": "^10.0.3",
+    "drizzle-kit": "^0.31.10",
     "eslint": "^9",
     "eslint-config-next": "16.2.11",
     "tailwindcss": "^4",
+    "tsx": "^4.23.1",
     "typescript": "^5"
   }
 }

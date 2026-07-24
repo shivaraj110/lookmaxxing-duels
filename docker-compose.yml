@@ -1,0 +1,16 @@
+services:
+  db:
+    image: postgres:latest
+    container_name: duels-postgres
+    environment:
+      POSTGRES_USER: duels
+      POSTGRES_PASSWORD: duels
+      POSTGRES_DB: duels
+    ports:
+      - "5433:5432" # 5432 is taken by ghostyDB on this machine
+    volumes:
+      # postgres 18+ images keep data under /var/lib/postgresql (not .../data)
+      - duels-pgdata:/var/lib/postgresql
+
+volumes:
+  duels-pgdata:

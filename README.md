@@ -1,36 +1,79 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# ⚔️ DUELS — Accountability Duels
 
-## Getting Started
+Stake your streak against a rival with the same goal. Daily photo check-ins,
+verified by your opponent. Miss a day — or get a check-in rejected — and your
+streak dies. Last streak standing wins.
 
-First, run the development server:
+## Stack
+
+- **Next.js 16** (App Router, Server Actions) + Tailwind
+- **PostgreSQL + Drizzle ORM** (`drizzle-orm` on the node-postgres driver) —
+  plain Docker container locally, any hosted Postgres in production
+- **Realtime WebSocket server** (`ws-server.ts`) — bridged to the app with
+  Postgres `LISTEN/NOTIFY`, so a check-in written by the web app is pushed
+  live to every browser watching that duel
+- **Email + password auth** — scrypt-hashed passwords, 30-day sessions in
+  Postgres; unknown emails become accounts on first login
+- **Photo storage** on disk (`data/uploads`), served by a route handler
+
+## Local development
+
+Requires Docker Desktop running.
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+docker compose up -d      # Postgres on port 5433
+npm run dev               # Next.js on :3000 + WebSocket server on :3001
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+`.env.local` is already set up for this compose file. Drizzle migrations in
+`drizzle/` are applied automatically on the first DB access — no manual
+migration step. After editing `lib/schema.ts`, run `npm run db:generate` to
+create the next migration (and restart the dev server). `npm run db:studio`
+opens Drizzle Studio to browse the data.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Try it end-to-end
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. Open http://localhost:3000 and log in with any email + password (8+
+   chars) — the account is created on the spot.
+2. Post a challenge.
+3. In a second browser (or incognito window), log in as a different email and
+   accept the challenge.
+4. Check in with a photo; watch the other browser update live. Verify or
+   reject your rival's check-ins. Trash-talk in the chat.
 
-## Learn More
+`npx tsx scripts/smoke.ts` runs the full end-to-end verification (auth,
+duels, realtime, streak rules) against the running dev servers.
 
-To learn more about Next.js, take a look at the following resources:
+## How the game works
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- A duel starts the day a rival accepts it (`started_on`).
+- Each player must check in **every day** with photo proof.
+- The opponent approves or rejects each check-in. Pending check-ins count
+  until rejected.
+- A missed past day or a rejected check-in **breaks your streak** — your
+  opponent wins. If both break on the same day, it's a draw. Survive the full
+  duel length together and you both win.
+- Duels are settled lazily whenever a duel page loads (no cron needed).
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Architecture notes
 
-## Deploy on Vercel
+```
+Browser ──HTTP──▶ Next.js (server actions write via Drizzle, then pg_notify)
+   ▲                                │
+   └──────WebSocket◀── ws-server ◀──┘  (LISTEN duel_events → broadcast to room)
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- `ws-server.ts` authenticates sockets with the same session cookie the app
+  sets (cookies are host-scoped, so localhost:3001 receives them).
+- Chat messages ride inside the NOTIFY payload for instant delivery; other
+  events just tell clients to refetch.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Deploying before Jul 31
+
+1. Provision a Postgres (Supabase/Neon/RDS — any connection string works)
+   and set `DATABASE_URL`.
+2. Run the web app (`next start`) and `ws-server.ts` on a host that supports
+   long-lived processes (Railway, Fly.io, Render, a VPS). Set
+   `NEXT_PUBLIC_SITE_URL` and `WS_PORT`/`NEXT_PUBLIC_WS_PORT`.
+3. Photos are written to `UPLOADS_DIR` — mount a persistent volume for it.
