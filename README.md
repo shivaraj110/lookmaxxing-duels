@@ -14,7 +14,9 @@ streak dies. Last streak standing wins.
   live to every browser watching that duel
 - **Email + password auth** — scrypt-hashed passwords, 30-day sessions in
   Postgres; unknown emails become accounts on first login
-- **Photo storage** on disk (`data/uploads`), served by a route handler
+- **Photo storage** on [UploadThing](https://uploadthing.com) — check-in
+  photos are uploaded server-side via `UTApi` and the CDN URL is stored on
+  the check-in row
 
 ## Local development
 
@@ -26,7 +28,12 @@ docker compose up -d      # Postgres on port 5433
 npm run dev               # Next.js on :3000 + WebSocket server on :3001
 ```
 
-`.env.local` is already set up for this compose file. Drizzle migrations in
+`.env.local` is already set up for this compose file — except
+`UPLOADTHING_TOKEN`: create a free app at
+[uploadthing.com/dashboard](https://uploadthing.com/dashboard) and paste its
+token there (check-ins need it; everything else works without).
+
+Drizzle migrations in
 `drizzle/` are applied automatically on the first DB access — no manual
 migration step. After editing `lib/schema.ts`, run `npm run db:generate` to
 create the next migration (and restart the dev server). `npm run db:studio`
@@ -75,5 +82,6 @@ Browser ──HTTP──▶ Next.js (server actions write via Drizzle, then pg_n
    and set `DATABASE_URL`.
 2. Run the web app (`next start`) and `ws-server.ts` on a host that supports
    long-lived processes (Railway, Fly.io, Render, a VPS). Set
-   `NEXT_PUBLIC_SITE_URL` and `WS_PORT`/`NEXT_PUBLIC_WS_PORT`.
-3. Photos are written to `UPLOADS_DIR` — mount a persistent volume for it.
+   `NEXT_PUBLIC_SITE_URL`, `WS_PORT`/`NEXT_PUBLIC_WS_PORT`, and
+   `UPLOADTHING_TOKEN`.
+3. Photos live on UploadThing's CDN — nothing to persist on the host.

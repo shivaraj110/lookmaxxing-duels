@@ -1,19 +1,15 @@
 "use server";
 
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { and, eq, isNull } from "drizzle-orm";
+import { UTApi } from "uploadthing/server";
 import { db } from "@/lib/db";
 import { checkins, duels, messages } from "@/lib/schema";
 import { destroySession, requireUser } from "@/lib/auth";
 import { publishDuelEvent } from "@/lib/events";
 import { localDateStr } from "@/lib/duels";
 import type { Duel } from "@/lib/types";
-
-const UPLOADS_DIR =
-  process.env.UPLOADS_DIR ?? path.join(process.cwd(), "data", "uploads");
 
 function pgCode(err: unknown): string | undefined {
   const e = err as { code?: string; cause?: { code?: string } };
@@ -86,14 +82,13 @@ export async function checkIn(duelId: string, formData: FormData) {
 
   const note = String(formData.get("note") ?? "").slice(0, 300);
   const today = localDateStr();
-  const ext = (photo.name.split(".").pop() || "jpg")
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, "");
-  const relPath = `${duelId}/${user.id}/${today}.${ext || "jpg"}`;
 
-  const absPath = path.join(UPLOADS_DIR, relPath);
-  await mkdir(path.dirname(absPath), { recursive: true });
-  await writeFile(absPath, Buffer.from(await photo.arrayBuffer()));
+  if (!process.env.UPLOADTHING_TOKEN)
+    throw new Error("UPLOADTHING_TOKEN is not set — add it to .env.local.");
+  const utapi = new UTApi();
+  const uploaded = await utapi.uploadFiles(photo);
+  if (uploaded.error || !uploaded.data)
+    throw new Error(`Photo upload failed: ${uploaded.error?.message ?? "unknown error"}`);
 
   const d = await db();
   try {
@@ -101,10 +96,12 @@ export async function checkIn(duelId: string, formData: FormData) {
       duel_id: duelId,
       user_id: user.id,
       day: today,
-      photo_path: relPath,
+      photo_path: uploaded.data.ufsUrl,
       note,
     });
   } catch (err) {
+    // Don't leave an orphaned file behind if the row was rejected.
+    await utapi.deleteFiles(uploaded.data.key).catch(() => {});
     if (pgCode(err) === "23505")
       throw new Error("You already checked in today.");
     throw err;

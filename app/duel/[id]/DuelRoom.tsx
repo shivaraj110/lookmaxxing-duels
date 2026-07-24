@@ -237,7 +237,7 @@ export default function DuelRoom({
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
-                    src={`/uploads/${c.photo_path}`}
+                    src={c.photo_path}
                     alt={`Check-in ${c.day}`}
                     className="aspect-video w-full object-cover"
                   />
