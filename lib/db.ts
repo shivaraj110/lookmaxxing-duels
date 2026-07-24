@@ -9,6 +9,20 @@ pgTypes.setTypeParser(1082, (v) => v);
 
 export type Db = NodePgDatabase<typeof schema>;
 
+const CONNECTION_STRING =
+  process.env.DATABASE_URL ?? "postgres://duels:duels@127.0.0.1:5433/duels";
+
+/**
+ * Managed Postgres (Supabase, etc.) requires TLS; local Docker doesn't.
+ * `rejectUnauthorized: false` because Supabase's pooler presents a cert for a
+ * shared hostname that won't chain-validate against the connection host.
+ */
+export function sslFor(url: string) {
+  return /sslmode=require|supabase\.com|\.pooler\./.test(url)
+    ? { rejectUnauthorized: false }
+    : undefined;
+}
+
 // Survive Next.js dev hot-reloads without leaking pools.
 const g = globalThis as unknown as {
   __duelsPool?: Pool;
@@ -19,8 +33,8 @@ const g = globalThis as unknown as {
 export const pool: Pool =
   g.__duelsPool ??
   (g.__duelsPool = new Pool({
-    connectionString:
-      process.env.DATABASE_URL ?? "postgres://duels:duels@127.0.0.1:5433/duels",
+    connectionString: CONNECTION_STRING,
+    ssl: sslFor(CONNECTION_STRING),
   }));
 
 const client: Db = g.__duelsDb ?? (g.__duelsDb = drizzle(pool, { schema }));
