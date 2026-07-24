@@ -39,12 +39,24 @@ export const pool: Pool =
 
 const client: Db = g.__duelsDb ?? (g.__duelsDb = drizzle(pool, { schema }));
 
-/** Returns the Drizzle instance after running migrations (once per process). */
+/**
+ * Returns the Drizzle instance, migrating once per process in local dev only.
+ *
+ * In production, migrations are a deploy step (`scripts/migrate-prod.ts`), not
+ * a request-time side effect: serverless runtimes hit Supabase's transaction
+ * pooler, which rejects the migrator's DDL/transaction (the `CREATE SCHEMA
+ * "drizzle"` failure). Set RUN_DB_MIGRATE_ON_BOOT=1 to force it anyway.
+ */
 export function db(): Promise<Db> {
   if (!g.__duelsReady) {
-    g.__duelsReady = migrate(client, {
-      migrationsFolder: path.join(process.cwd(), "drizzle"),
-    });
+    const shouldMigrate =
+      process.env.RUN_DB_MIGRATE_ON_BOOT === "1" ||
+      process.env.NODE_ENV !== "production";
+    g.__duelsReady = shouldMigrate
+      ? migrate(client, {
+          migrationsFolder: path.join(process.cwd(), "drizzle"),
+        })
+      : Promise.resolve();
   }
   return g.__duelsReady.then(() => client);
 }
